@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reset 천명</title>
+<style>
+  body { background:#060010; color:#F0E6FF; font-family:sans-serif; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; margin:0; text-align:center; padding:20px; }
+  h2 { color:#FFD700; margin-bottom:8px; }
+  p { color:#B8A0D8; font-size:14px; margin-bottom:24px; }
+  .btn { background:linear-gradient(135deg,#c9a227,#7B2FBE); border:none; border-radius:14px; padding:16px 32px; color:#fff; font-size:16px; font-weight:700; cursor:pointer; margin-bottom:12px; width:100%; max-width:300px; }
+  .done { color:#6fc88a; font-size:18px; display:none; margin-top:16px; }
+</style>
+</head>
+<body>
+<h2>🌙 Reset 천명</h2>
+<p>This will clear all saved data and return the app to a fresh new-user state.</p>
+<button class="btn" onclick="doReset()">Clear All App Data</button>
+<div class="done" id="done">✓ Done! Redirecting to app…</div>
+<script>
+function doReset(){
+  const keys=[
+    'cheonmyeong_people',
+    'cheonmyeong_people_backup',
+    'cheonmyeong_trial',
+    'cheonmyeong_ref_code',
+    'cheonmyeong_referred_by',
+    'cheonmyeong_renewal_prompt',
+    'cheonmyeong_lang'
+  ];
+  keys.forEach(k => localStorage.removeItem(k));
+  document.getElementById('done').style.display='block';
+  setTimeout(() => { window.location.href='index.html'; }, 1200);
+}
+</script>
+</body>
+</html>

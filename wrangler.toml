@@ -1,0 +1,29 @@
+# 천명 · Cheonmyeong — Cloudflare Worker Config
+# Deploy: npx wrangler deploy
+# Docs:   https://developers.cloudflare.com/workers/
+
+name = "cheonmyeong-oracle"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+# Set REQUIRE_RECEIPT = "true" after your App Store launch
+# to enforce Apple receipt verification on every request
+REQUIRE_RECEIPT = "false"
+
+# ALLOWED_ORIGIN = "https://your-app-domain.com"
+# Leave blank (or "*") during development
+
+# ─────────────────────────────────────────────────────────────
+# Set these secrets with the Cloudflare dashboard or CLI:
+#
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put APP_SECRET
+#   npx wrangler secret put APPLE_SHARED_SECRET
+#
+# ANTHROPIC_API_KEY    — from console.anthropic.com/settings/keys
+# APP_SECRET           — any random string, e.g. "cm-prod-2026-abc123"
+#                        (must match ORACLE_APP_SECRET in index.html)
+# APPLE_SHARED_SECRET  — App Store Connect → your app →
+#                        Monetization → In-App Purchases → App-Specific Shared Secret
+# ─────────────────────────────────────────────────────────────
