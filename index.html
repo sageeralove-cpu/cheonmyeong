@@ -1825,7 +1825,7 @@ function applyLongitudeToHour(clockHour,correctionMinutes){
 // =============================================
 // APP STATE
 // =============================================
-let state={screen:'splash',tab:'chart',isPremium:false,isOracle:false,userData:null,chart:null,partnerData:null,partnerChart:null,chat:[],currentAge:26,savedPeople:[],activePersonId:null,editMode:false,daeunPanelOpen:true,oracleConsultCount:0,oracleConsultMonth:null,soundEnabled:true,soundStarted:false,oracleCredits:0,trialStart:null,trialTier:null,subscriptionEnd:null,referralCode:null,referredBy:null,trialExpiredNotice:false,subscriptionExpiredNotice:false,appleReceipt:localStorage.getItem('cheonmyeong_receipt')||null};
+let state={screen:'splash',tab:'chart',isPremium:false,isOracle:false,userData:null,chart:null,partnerData:null,partnerChart:null,chat:[],currentAge:26,savedPeople:[],activePersonId:null,editMode:false,daeunPanelOpen:true,oracleConsultCount:0,oracleConsultMonth:null,soundEnabled:true,soundStarted:false,oracleCredits:0,trialStart:null,trialTier:null,subscriptionEnd:null,referralCode:null,referredBy:null,trialExpiredNotice:false,subscriptionExpiredNotice:false,appleReceipt:localStorage.getItem('cheonmyeong_receipt')||null,stripeEmail:localStorage.getItem('cheonmyeong_email')||null};
 
 // =============================================
 // ORACLE AI — Worker Proxy Engine
@@ -1834,6 +1834,19 @@ let state={screen:'splash',tab:'chart',isPremium:false,isOracle:false,userData:n
 // ── Configuration — update WORKER_URL after deploying your Cloudflare Worker ──
 const WORKER_URL = 'https://cheonmyeong-oracle.sage-era-love.workers.dev';
 const ORACLE_APP_SECRET = 'cheonmyeong-oracle-2026'; // Must match APP_SECRET in your worker
+
+// ── Stripe Payment Links (web purchases) ─────────────────────────────────────
+const STRIPE_LINKS = {
+  premium_monthly:  'https://buy.stripe.com/eVqfZh1ZEeHyekk4RReIw0h',
+  premium_annual:   'https://buy.stripe.com/aFaeVdbAe42U6RSfwveIw0i',
+  oracle_monthly:   'https://buy.stripe.com/aFa5kD6fU2YQb88doneIw0g',
+  oracle_annual:    'https://buy.stripe.com/4gMcN5gUyeHyccc843eIw0j',
+  lifetime:         'https://buy.stripe.com/28EbJ1bAegPG6RSbgfeIw0f',
+  scrolls_5:        'https://buy.stripe.com/cNi4gz1ZE1UM9004RReIw0m',
+  scrolls_15:       'https://buy.stripe.com/eVq9ATdIm8jab883NNeIw0l',
+  scrolls_30:       'https://buy.stripe.com/bJecN5fQufLCa44acbeIw0n',
+  scrolls_60:       'https://buy.stripe.com/3cI7sL9s66b2fooacbeIw0o',
+};
 
 // Apple IAP Product IDs — must match App Store Connect exactly
 const IAP_PRODUCTS = {
@@ -1914,7 +1927,7 @@ function activateOracleGrant(){
   saveTrialState();
 }
 
-// ── Trigger Apple IAP purchase ─────────────────────────────────────────────
+// ── Trigger purchase — routes to Apple IAP on iOS, Stripe on web ─────────────
 function purchaseProduct(productId){
   // Native iOS (PWABuilder wrapper)
   if(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.iap){
@@ -1922,19 +1935,26 @@ function purchaseProduct(productId){
     showToast(lang==='ko'?'App Store에 연결 중…':'Connecting to App Store…');
     return;
   }
-  // Web / development fallback — simulate grant for testing
-  const grant = getProductGrant(productId);
-  if(!grant){ alert('Purchase unavailable in browser. Please use the iOS app.'); return; }
-  if(grant.credits){
-    state.oracleCredits += grant.credits;
-    saveTrialState();
-    showToast(lang==='ko'?`💬 신탁서 ${grant.credits}장 충전됨! (테스트)`:`💬 ${grant.credits} Oracle Scrolls added! (test)`);
-    render();
-  } else if(grant.tier === 'premium'){
-    activatePremium(); // existing trial function
-  } else if(grant.tier === 'oracle'){
-    activateOracle();
-  }
+  // Web — route to Stripe with email capture
+  const stripeUrl = getStripeLinkForProduct(productId);
+  if(!stripeUrl){ alert(lang==='ko'?'결제를 처리할 수 없습니다.':'Purchase unavailable.'); return; }
+  showStripeEmailModal(stripeUrl);
+}
+
+// Map IAP product ID → Stripe payment link URL
+function getStripeLinkForProduct(productId){
+  const map = {
+    [IAP_PRODUCTS.premium_monthly]: STRIPE_LINKS.premium_monthly,
+    [IAP_PRODUCTS.premium_annual]:  STRIPE_LINKS.premium_annual,
+    [IAP_PRODUCTS.oracle_monthly]:  STRIPE_LINKS.oracle_monthly,
+    [IAP_PRODUCTS.oracle_annual]:   STRIPE_LINKS.oracle_annual,
+    [IAP_PRODUCTS.lifetime]:        STRIPE_LINKS.lifetime,
+    [IAP_PRODUCTS.scrolls_5]:       STRIPE_LINKS.scrolls_5,
+    [IAP_PRODUCTS.scrolls_15]:      STRIPE_LINKS.scrolls_15,
+    [IAP_PRODUCTS.scrolls_30]:      STRIPE_LINKS.scrolls_30,
+    [IAP_PRODUCTS.scrolls_60]:      STRIPE_LINKS.scrolls_60,
+  };
+  return map[productId] || null;
 }
 
 // ── Restore Purchases ──────────────────────────────────────────────────────
@@ -1944,7 +1964,144 @@ function restorePurchases(){
     showToast(lang==='ko'?'구매 내역 확인 중…':'Checking purchase history…');
     return;
   }
-  showToast(lang==='ko'?'iOS 앱에서만 구매 복원이 가능합니다.':'Restore is only available in the iOS app.');
+  // Web — restore via Stripe subscription check by email
+  const isKo = lang==='ko';
+  const savedEmail = localStorage.getItem('cheonmyeong_email') || state.stripeEmail;
+  if(savedEmail){
+    showToast(isKo?'구독 확인 중…':'Checking subscription…');
+    checkStripeSubscription(savedEmail);
+    return;
+  }
+  // No email saved — ask user
+  const entered = prompt(isKo?'구독 복원을 위해 결제 시 사용한 이메일을 입력해 주세요:':'Enter the email address you used when purchasing:');
+  if(!entered || !entered.includes('@')){
+    if(entered !== null) showToast(isKo?'유효한 이메일을 입력해 주세요.':'Please enter a valid email address.');
+    return;
+  }
+  checkStripeSubscription(entered.trim().toLowerCase());
+}
+
+// ── Stripe Email Capture Modal ─────────────────────────────────────────────
+function showStripeEmailModal(stripeUrl){
+  const isKo = lang==='ko';
+  const overlay = document.createElement('div');
+  overlay.id = 'stripeEmailModal';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(6,0,16,0.92);backdrop-filter:blur(12px);';
+  overlay.innerHTML = `
+  <div style="max-width:360px;width:100%;background:linear-gradient(160deg,#0D0025,#1A0040);border:1px solid rgba(201,162,39,0.5);border-radius:24px;padding:32px 24px;text-align:center;box-shadow:0 0 60px rgba(123,47,190,0.4);">
+    <div style="font-size:36px;margin-bottom:12px;">✦</div>
+    <div style="font-family:'Noto Serif KR',serif;font-size:20px;color:var(--gold);margin-bottom:10px;">
+      ${isKo?'이메일을 입력해 주세요':'Enter Your Email'}
+    </div>
+    <div style="font-size:13px;color:var(--txt2);line-height:1.7;margin-bottom:20px;">
+      ${isKo
+        ?'구독 활성화 및 기기 간 복원을 위해<br>이메일 주소가 필요합니다.'
+        :'Your email is needed to activate your<br>subscription and restore across devices.'}
+    </div>
+    <input id="stripeEmailInput" type="email" placeholder="${isKo?'이메일 주소':'Email address'}"
+      style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:12px;border:1px solid rgba(201,162,39,0.4);background:rgba(255,255,255,0.06);color:#fff;font-size:15px;font-family:'Noto Sans KR',sans-serif;margin-bottom:16px;outline:none;"
+      value="${localStorage.getItem('cheonmyeong_email')||''}" />
+    <button onclick="proceedToStripe('${stripeUrl}')"
+      style="width:100%;padding:14px;border:none;border-radius:14px;background:linear-gradient(135deg,#c9a227,#7b2fbe);color:#fff;font-size:16px;font-weight:800;cursor:pointer;font-family:'Noto Sans KR',sans-serif;margin-bottom:12px;">
+      ${isKo?'결제하기 →':'Proceed to Payment →'}
+    </button>
+    <button onclick="document.getElementById('stripeEmailModal').remove()"
+      style="background:none;border:none;color:var(--txt3);font-size:13px;cursor:pointer;font-family:'Noto Sans KR',sans-serif;">
+      ${isKo?'취소':'Cancel'}
+    </button>
+  </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(()=>{ const inp=document.getElementById('stripeEmailInput'); if(inp) inp.focus(); },100);
+}
+
+function proceedToStripe(baseUrl){
+  const isKo = lang==='ko';
+  const input = document.getElementById('stripeEmailInput');
+  const email = input ? input.value.trim() : '';
+  if(!email || !email.includes('@')){
+    alert(isKo?'유효한 이메일을 입력해 주세요.':'Please enter a valid email address.');
+    return;
+  }
+  localStorage.setItem('cheonmyeong_email', email);
+  state.stripeEmail = email;
+  document.getElementById('stripeEmailModal')?.remove();
+  // Redirect to Stripe with email pre-filled
+  const url = new URL(baseUrl);
+  url.searchParams.set('prefilled_email', email);
+  window.location.href = url.toString();
+}
+
+// ── Handle return from Stripe checkout ────────────────────────────────────
+async function checkStripeReturn(){
+  const params = new URLSearchParams(window.location.search);
+  const success = params.get('stripe_success');
+  if(!success) return;
+  // Remove the query param from the URL without reloading
+  window.history.replaceState({}, '', window.location.pathname);
+  const isKo = lang==='ko';
+  const email = localStorage.getItem('cheonmyeong_email') || state.stripeEmail;
+  if(!email){
+    showToast(isKo?'결제 완료! 잠시 후 자동으로 확인됩니다.':'Payment complete! Verifying shortly…');
+    return;
+  }
+  showToast(isKo?'결제 확인 중…':'Verifying payment…');
+  // Give Stripe webhook up to ~3 seconds to fire before first check
+  await new Promise(r => setTimeout(r, 3000));
+  const activated = await checkStripeSubscription(email);
+  if(!activated){
+    // Retry once more after 5 seconds (webhook may be slow)
+    await new Promise(r => setTimeout(r, 5000));
+    await checkStripeSubscription(email);
+  }
+}
+
+// ── Verify subscription with Cloudflare Worker (Stripe KV) ────────────────
+async function checkStripeSubscription(email){
+  if(!email) return false;
+  const isKo = lang==='ko';
+  try {
+    const resp = await fetch(`${WORKER_URL}/check-subscription`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-app-secret': ORACLE_APP_SECRET,
+      },
+      body: JSON.stringify({ email: email.toLowerCase().trim() }),
+    });
+    if(!resp.ok) return false;
+    const data = await resp.json();
+    // Save email for future checks
+    state.stripeEmail = email;
+    localStorage.setItem('cheonmyeong_email', email);
+    if(data.tier === 'oracle'){
+      activateOracleGrant();
+      if(data.expiresAt) state.subscriptionEnd = data.expiresAt;
+      saveTrialState();
+      showToast(isKo?'✦ 오라클 구독이 활성화되었습니다!':'✦ Oracle subscription activated!');
+      render();
+      return true;
+    } else if(data.tier === 'premium'){
+      activatePremiumGrant();
+      if(data.expiresAt) state.subscriptionEnd = data.expiresAt;
+      saveTrialState();
+      showToast(isKo?'✦ 프리미엄 구독이 활성화되었습니다!':'✦ Premium subscription activated!');
+      render();
+      return true;
+    } else if(data.scrollCredits > 0){
+      const prev = state.oracleCredits || 0;
+      const added = data.scrollCredits - prev;
+      state.oracleCredits = data.scrollCredits;
+      saveTrialState();
+      if(added > 0){
+        showToast(isKo?`💬 신탁서 ${added}장 충전됨!`:`💬 ${added} Oracle Scrolls added!`);
+        render();
+        return true;
+      }
+    }
+  } catch(e) {
+    console.warn('Stripe subscription check failed:', e);
+  }
+  return false;
 }
 
 // ── Toast helper ───────────────────────────────────────────────────────────
@@ -4179,12 +4336,12 @@ function renderPremiumTab(){
            2. <b>전문가 대체 불가:</b> 법률·의료·재정·심리 상담을 대체하지 않습니다. 중요한 결정 전 반드시 자격을 갖춘 전문가와 상담하십시오.<br>
            3. <b>결과 책임:</b> 앱 콘텐츠를 근거로 한 행동의 결과에 대해 천명 개발팀은 법적 책임을 지지 않습니다.<br>
            4. <b>개인정보:</b> 입력된 생년월일 등 데이터는 기기 내에만 저장되며 서버로 전송되지 않습니다.<br>
-           5. <b>결제:</b> 구독은 언제든지 취소 가능하며 Apple 인앱결제 약관이 적용됩니다. 3일 무료 체험 후 자동 결제됩니다.`
+           5. <b>결제:</b> 구독은 언제든지 취소 가능합니다. iOS 앱: Apple 인앱결제 약관 적용. 웹: Stripe 결제 약관 적용. 3일 무료 체험 후 자동 결제됩니다.`
           :`1. <b>Entertainment Only:</b> All content in CHEONMYEONG is provided purely for entertainment and self-exploration. No results are guaranteed.<br>
            2. <b>Not Professional Advice:</b> This app does not replace legal, medical, financial, or psychological counsel. Consult qualified professionals for important decisions.<br>
            3. <b>No Liability:</b> The CHEONMYEONG development team accepts no legal responsibility for actions taken based on app content.<br>
            4. <b>Privacy:</b> Birth data entered is stored only on your device and never transmitted to servers.<br>
-           5. <b>Billing:</b> Subscriptions may be cancelled at any time. Apple In-App Purchase terms apply. Free trials convert automatically after 3 days.`}
+           5. <b>Billing:</b> Subscriptions may be cancelled at any time. iOS app: Apple In-App Purchase terms apply. Web: Stripe payment terms apply. Free trials convert automatically after 3 days.`}
       </div>
     </div>
 
@@ -4771,6 +4928,7 @@ loadTrialState();
 handleReferralOnLoad();
 getOrCreateReferralCode();
 render();
+checkStripeReturn(); // handles ?stripe_success= return from Stripe checkout
 
 // ── Register Service Worker (PWA / App Store offline support) ──────────
 if('serviceWorker' in navigator){
