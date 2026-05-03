@@ -1937,6 +1937,8 @@ function purchaseProduct(productId){
     showToast(lang==='ko'?'App Store에 연결 중…':'Connecting to App Store…');
     return;
   }
+  // Save what they're buying so we can grant it immediately on return
+  localStorage.setItem('cheonmyeong_pending_purchase', productId);
   // Web — route to Stripe with email capture
   const stripeUrl = getStripeLinkForProduct(productId);
   if(!stripeUrl){ alert(lang==='ko'?'결제를 처리할 수 없습니다.':'Purchase unavailable.'); return; }
@@ -2051,19 +2053,58 @@ async function checkStripeReturn(){
   // Remove the query param from the URL without reloading
   window.history.replaceState({}, '', window.location.pathname);
   const isKo = lang==='ko';
-  const email = localStorage.getItem('cheonmyeong_email') || state.stripeEmail;
-  if(!email){
-    showToast(isKo?'결제 완료! 잠시 후 자동으로 확인됩니다.':'Payment complete! Verifying shortly…');
-    return;
+
+  // ── Step 1: Optimistic grant — unlock immediately based on what was purchased
+  const pendingProduct = localStorage.getItem('cheonmyeong_pending_purchase');
+  if(pendingProduct){
+    localStorage.removeItem('cheonmyeong_pending_purchase');
+    applyOptimisticGrant(pendingProduct);
+  } else {
+    // Fallback: grant based on the stripe_success type if no product saved
+    if(success === 'oracle') activateOracleGrant();
+    else if(success === 'premium') activatePremiumGrant();
+    // scrolls: can't know quantity without saved product, show pending message
+    else showToast(isKo?'🎉 결제가 완료되었습니다! 잠시 후 신탁서가 충전됩니다.':'🎉 Payment complete! Oracle Scrolls arriving shortly…');
+    saveTrialState();
+    render();
   }
-  showToast(isKo?'결제 확인 중…':'Verifying payment…');
-  // Give Stripe webhook up to ~3 seconds to fire before first check
-  await new Promise(r => setTimeout(r, 3000));
-  const activated = await checkStripeSubscription(email);
-  if(!activated){
-    // Retry once more after 5 seconds (webhook may be slow)
-    await new Promise(r => setTimeout(r, 5000));
-    await checkStripeSubscription(email);
+
+  // ── Step 2: Background verification — sync with server when webhook is ready
+  const email = localStorage.getItem('cheonmyeong_email') || state.stripeEmail;
+  if(email){
+    verifyStripeInBackground(email);
+  }
+}
+
+// Immediately grant access based on the product that was purchased
+function applyOptimisticGrant(productId){
+  const isKo = lang==='ko';
+  const grant = getProductGrant(productId);
+  if(!grant) return;
+  if(grant.credits){
+    state.oracleCredits = (state.oracleCredits || 0) + grant.credits;
+    saveTrialState();
+    showToast(isKo?`🎉 신탁서 ${grant.credits}장 충전됨!`:`🎉 ${grant.credits} Oracle Scrolls added!`);
+    render();
+  } else if(grant.tier === 'oracle'){
+    activateOracleGrant();
+    saveTrialState();
+    showToast(isKo?'✦ 오라클 구독이 활성화되었습니다!':'✦ Oracle subscription activated!');
+    render();
+  } else if(grant.tier === 'premium'){
+    activatePremiumGrant();
+    saveTrialState();
+    showToast(isKo?'✦ 프리미엄 구독이 활성화되었습니다!':'✦ Premium subscription activated!');
+    render();
+  }
+}
+
+// Poll the server in the background until it confirms the subscription (webhook may be slow)
+async function verifyStripeInBackground(email){
+  for(let i=0; i<6; i++){
+    await new Promise(r => setTimeout(r, 5000)); // wait 5s between each check
+    const verified = await checkStripeSubscription(email);
+    if(verified) break;
   }
 }
 
@@ -2086,29 +2127,34 @@ async function checkStripeSubscription(email){
     state.stripeEmail = email;
     localStorage.setItem('cheonmyeong_email', email);
     if(data.tier === 'oracle'){
-      activateOracleGrant();
+      // Only upgrade, never downgrade (optimistic grant may already be active)
+      if(!state.isOracle){
+        activateOracleGrant();
+        showToast(isKo?'✦ 오라클 구독이 확인되었습니다!':'✦ Oracle subscription confirmed!');
+      }
       if(data.expiresAt) state.subscriptionEnd = data.expiresAt;
       saveTrialState();
-      showToast(isKo?'✦ 오라클 구독이 활성화되었습니다!':'✦ Oracle subscription activated!');
       render();
       return true;
     } else if(data.tier === 'premium'){
-      activatePremiumGrant();
+      if(!state.isPremium && !state.isOracle){
+        activatePremiumGrant();
+        showToast(isKo?'✦ 프리미엄 구독이 확인되었습니다!':'✦ Premium subscription confirmed!');
+      }
       if(data.expiresAt) state.subscriptionEnd = data.expiresAt;
       saveTrialState();
-      showToast(isKo?'✦ 프리미엄 구독이 활성화되었습니다!':'✦ Premium subscription activated!');
       render();
       return true;
     } else if(data.scrollCredits > 0){
-      const prev = state.oracleCredits || 0;
-      const added = data.scrollCredits - prev;
-      state.oracleCredits = data.scrollCredits;
-      saveTrialState();
-      if(added > 0){
-        showToast(isKo?`💬 신탁서 ${added}장 충전됨!`:`💬 ${added} Oracle Scrolls added!`);
+      // Only add if server has MORE credits than local (don't overwrite optimistic grant)
+      if(data.scrollCredits > (state.oracleCredits || 0)){
+        const added = data.scrollCredits - (state.oracleCredits || 0);
+        state.oracleCredits = data.scrollCredits;
+        saveTrialState();
+        showToast(isKo?`💬 신탁서 ${added}장 추가 확인됨!`:`💬 ${added} more Oracle Scrolls confirmed!`);
         render();
-        return true;
       }
+      return true;
     }
   } catch(e) {
     console.warn('Stripe subscription check failed:', e);
